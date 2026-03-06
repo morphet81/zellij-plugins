@@ -34,8 +34,9 @@ __atm_get_tab_name() {
 
     raw=$(printf '%s' "$layout" | awk -v pid="$ZELLIJ_PANE_ID" '
         /^[[:space:]]*(tab|fake_tab) / {
-            if (match($0, /name="([^"]*)"/, m)) {
-                current_tab = m[1]
+            s = $0
+            if (match(s, /name="[^"]*"/)) {
+                current_tab = substr(s, RSTART + 6, RLENGTH - 7)
             }
         }
         {

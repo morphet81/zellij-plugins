@@ -38,8 +38,9 @@ get_pane_tab_name() {
     # print it when we find a line containing our pane id.
     name=$(printf '%s' "$layout" | awk -v pid="$target_pane" '
         /^[[:space:]]*(tab|fake_tab) / {
-            if (match($0, /name="([^"]*)"/, m)) {
-                current_tab = m[1]
+            s = $0
+            if (match(s, /name="[^"]*"/)) {
+                current_tab = substr(s, RSTART + 6, RLENGTH - 7)
             }
         }
         {
