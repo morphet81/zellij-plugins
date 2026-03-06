@@ -84,13 +84,19 @@ add-zsh-hook precmd __atm_precmd_refresh
 
 claude() {
     if [[ -n "$ZELLIJ" ]] && [[ -n "$ZELLIJ_PANE_ID" ]]; then
+        local state_dir="/tmp/ai-tab-monitor-${ZELLIJ_SESSION_NAME}"
         __atm_capture_orig_name
+        # Write PID so the hook can distinguish mid-session events (e.g. /clear)
+        # from real exits: if this shell is still alive, cleanup becomes idle.
+        mkdir -p "$state_dir" 2>/dev/null
+        printf '%s' "$$" > "${state_dir}/pane-${ZELLIJ_PANE_ID}.pid"
         bash "$__ATM_HOOK" idle
 
         command claude "$@"
         local _exit=$?
 
-        # Safety-net cleanup (SessionEnd hook handles this normally)
+        # Remove PID before safety-net cleanup so the hook knows it's a real exit
+        rm -f "${state_dir}/pane-${ZELLIJ_PANE_ID}.pid" 2>/dev/null
         bash "$__ATM_HOOK" cleanup 2>/dev/null
         return $_exit
     else
@@ -172,7 +178,10 @@ __atm_screen_monitor() {
 
 cursor-agent() {
     if [[ -n "$ZELLIJ" ]] && [[ -n "$ZELLIJ_PANE_ID" ]]; then
+        local state_dir="/tmp/ai-tab-monitor-${ZELLIJ_SESSION_NAME}"
         __atm_capture_orig_name
+        mkdir -p "$state_dir" 2>/dev/null
+        printf '%s' "$$" > "${state_dir}/pane-${ZELLIJ_PANE_ID}.pid"
         bash "$__ATM_HOOK" idle
 
         __atm_screen_monitor </dev/null &
@@ -186,7 +195,8 @@ cursor-agent() {
         } always {
             kill $_monitor_pid 2>/dev/null
             wait $_monitor_pid 2>/dev/null
-            rm -f "/tmp/ai-tab-monitor-${ZELLIJ_SESSION_NAME}/pane-${ZELLIJ_PANE_ID}.dump" 2>/dev/null
+            rm -f "${state_dir}/pane-${ZELLIJ_PANE_ID}.dump" 2>/dev/null
+            rm -f "${state_dir}/pane-${ZELLIJ_PANE_ID}.pid" 2>/dev/null
             bash "$__ATM_HOOK" cleanup 2>/dev/null
         }
         return ${_exit:-0}

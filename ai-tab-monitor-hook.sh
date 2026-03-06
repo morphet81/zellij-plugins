@@ -74,6 +74,18 @@ trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
 # --- Cleanup ----------------------------------------------------------------
 
 if [ "$STATE" = "cleanup" ]; then
+    # If the wrapper shell is still alive, this is a mid-session event
+    # (e.g. /clear fires SessionEnd) — treat as idle, not a real exit.
+    PID_FILE="${STATE_DIR}/pane-${ZELLIJ_PANE_ID}.pid"
+    if [ -f "$PID_FILE" ]; then
+        wrapper_pid=$(cat "$PID_FILE" 2>/dev/null)
+        if [ -n "$wrapper_pid" ] && kill -0 "$wrapper_pid" 2>/dev/null; then
+            STATE="idle"
+        fi
+    fi
+fi
+
+if [ "$STATE" = "cleanup" ]; then
     orig=$(cat "$ORIG_FILE" 2>/dev/null)
     rm -f "$STATE_FILE" "$ORIG_FILE" 2>/dev/null
 
