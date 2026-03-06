@@ -1,0 +1,12 @@
+// Sample Zellij layout with Claude Tab Monitor
+// Usage: zellij --layout layout.kdl
+//
+// The plugin pane is minimal (1 row, borderless) since it has no UI.
+// It runs in the background and renames tabs based on Claude Code session state.
+
+layout {
+    pane size=1 borderless=true {
+        plugin location="file:~/.config/zellij/plugins/claude-tab-monitor.wasm"
+    }
+    pane
+}

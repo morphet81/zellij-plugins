@@ -1,123 +1,146 @@
-# zellij-plugins
+# Claude Tab Monitor for Zellij
 
-Zellij tab status indicators for AI coding agents.
-
-## ai-tab-monitor
-
-Monitors [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Cursor Agent](https://docs.cursor.com/agent) sessions running in Zellij, showing their status as a colored icon prepended to the tab name.
+A native Zellij WASM plugin that shows colored status pills in tab names based on Claude Code session state.
 
 | Icon | State | Meaning |
 |------|-------|---------|
-| 🟢 | Idle | Agent is ready for a new query |
-| 🔵 | Working | Agent is processing or generating |
-| 🟡 | Waiting | Agent needs user approval (permission prompt) |
+| 🔵 | Working | Claude is processing or generating |
+| 🟡 | Waiting | Claude needs user approval (permission prompt) |
+| 🟢 | Idle | Claude is ready for a new prompt |
+| _(none)_ | No session | No active Claude sessions in this tab |
 
 The original tab name is preserved and restored when all sessions exit.
 
-When multiple sessions run in the same tab, the icon reflects the highest-priority state: **waiting > working > idle**.
+When multiple Claude sessions run in the same tab, the icon reflects the highest-priority state: **waiting > working > idle**.
 
-### How it works
-
-**Claude Code** uses native hooks — event-driven, instant, and reliable:
-
-- `UserPromptSubmit` / `PostToolUse` hooks → working
-- `Notification(permission_prompt)` hook → waiting
-- `Stop` / `Notification(idle_prompt)` hooks → idle
-- `SessionEnd` hook → cleanup and restore tab name
-
-No polling, no screen scraping, no pattern matching. State changes are detected the instant they happen.
-
-**Cursor Agent** falls back to periodic screen monitoring (same approach works for any terminal-based agent):
-
-- Screen content changing between checks → working
-- Screen stable for ~3 seconds → checks for prompt patterns (waiting) or defaults to idle
-
-### Install
-
-**One-liner:**
+## Quick Install
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/morphet81/zellij-plugins/main/install.sh | bash
 ```
 
 The install script will:
-1. Download `ai-tab-monitor.zsh` and `ai-tab-monitor-hook.sh`
+1. Download `claude-tab-monitor.wasm`, `hook.sh`, and `claude-monitor.zsh` to `~/.config/zellij/plugins/`
 2. Offer to add the source line to your `.zshrc`
 3. Offer to configure Claude Code hooks in `~/.claude/settings.json` (requires `jq`)
 
-**Manual:**
+## Manual Install
 
 ```sh
 mkdir -p ~/.config/zellij/plugins
-curl -fsSL https://raw.githubusercontent.com/morphet81/zellij-plugins/main/ai-tab-monitor.zsh \
-  -o ~/.config/zellij/plugins/ai-tab-monitor.zsh
-curl -fsSL https://raw.githubusercontent.com/morphet81/zellij-plugins/main/ai-tab-monitor-hook.sh \
-  -o ~/.config/zellij/plugins/ai-tab-monitor-hook.sh
-chmod +x ~/.config/zellij/plugins/ai-tab-monitor-hook.sh
+
+# Download the WASM plugin (from releases)
+curl -fsSL https://github.com/morphet81/zellij-plugins/releases/latest/download/claude-tab-monitor.wasm \
+  -o ~/.config/zellij/plugins/claude-tab-monitor.wasm
+
+# Download the hook script and zsh wrapper
+curl -fsSL https://raw.githubusercontent.com/morphet81/zellij-plugins/main/hook.sh \
+  -o ~/.config/zellij/plugins/hook.sh
+chmod +x ~/.config/zellij/plugins/hook.sh
+
+curl -fsSL https://raw.githubusercontent.com/morphet81/zellij-plugins/main/claude-monitor.zsh \
+  -o ~/.config/zellij/plugins/claude-monitor.zsh
 ```
 
 Then add to your `.zshrc`:
 
 ```zsh
-source ~/.config/zellij/plugins/ai-tab-monitor.zsh
+source ~/.config/zellij/plugins/claude-monitor.zsh
 ```
 
-### Claude Code hooks setup
+## Loading the Plugin
 
-For instant state detection, add these hooks to `~/.claude/settings.json`:
+The WASM plugin must be running in your Zellij session. Add it to your layout:
+
+```kdl
+layout {
+    pane size=1 borderless=true {
+        plugin location="file:~/.config/zellij/plugins/claude-tab-monitor.wasm"
+    }
+    pane
+}
+```
+
+Or load it manually:
+
+```sh
+zellij plugin -- file:~/.config/zellij/plugins/claude-tab-monitor.wasm
+```
+
+## Claude Code Hooks
+
+Add these hooks to `~/.claude/settings.json` (the install script does this automatically):
 
 ```json
 {
   "hooks": {
     "UserPromptSubmit": [
-      {"matcher": "", "hooks": [{"type": "command", "command": "bash \"$HOME/.config/zellij/plugins/ai-tab-monitor-hook.sh\" working"}]}
+      {"matcher": "", "hooks": [{"type": "command", "command": "$HOME/.config/zellij/plugins/hook.sh working"}]}
     ],
     "PostToolUse": [
-      {"matcher": "", "hooks": [{"type": "command", "command": "bash \"$HOME/.config/zellij/plugins/ai-tab-monitor-hook.sh\" working"}]}
+      {"matcher": "", "hooks": [{"type": "command", "command": "$HOME/.config/zellij/plugins/hook.sh working"}]}
     ],
     "Stop": [
-      {"matcher": "", "hooks": [{"type": "command", "command": "bash \"$HOME/.config/zellij/plugins/ai-tab-monitor-hook.sh\" idle"}]}
+      {"matcher": "", "hooks": [{"type": "command", "command": "$HOME/.config/zellij/plugins/hook.sh idle"}]}
     ],
     "Notification": [
-      {"matcher": "permission_prompt", "hooks": [{"type": "command", "command": "bash \"$HOME/.config/zellij/plugins/ai-tab-monitor-hook.sh\" waiting"}]},
-      {"matcher": "idle_prompt", "hooks": [{"type": "command", "command": "bash \"$HOME/.config/zellij/plugins/ai-tab-monitor-hook.sh\" idle"}]},
-      {"matcher": "elicitation_dialog", "hooks": [{"type": "command", "command": "bash \"$HOME/.config/zellij/plugins/ai-tab-monitor-hook.sh\" waiting"}]}
-    ],
-    "SessionEnd": [
-      {"matcher": "", "hooks": [{"type": "command", "command": "bash \"$HOME/.config/zellij/plugins/ai-tab-monitor-hook.sh\" cleanup"}]}
+      {"matcher": "permission_prompt", "hooks": [{"type": "command", "command": "$HOME/.config/zellij/plugins/hook.sh waiting"}]},
+      {"matcher": "idle_prompt", "hooks": [{"type": "command", "command": "$HOME/.config/zellij/plugins/hook.sh idle"}]},
+      {"matcher": "elicitation_dialog", "hooks": [{"type": "command", "command": "$HOME/.config/zellij/plugins/hook.sh waiting"}]}
     ]
   }
 }
 ```
 
-> **Note:** Without hooks, Claude Code still works but falls back to the wrapper-only approach (shows idle on start, restores on exit — no working/waiting detection).
+## How It Works
 
-### Usage
+1. **WASM Plugin** (`claude-tab-monitor.wasm`) — runs inside Zellij, subscribes to tab/pane events, receives state updates via `zellij pipe`, tracks state per pane, aggregates per tab, renames tabs with pill prefixes
+2. **Hook script** (`hook.sh`) — 14-line POSIX shell script called by Claude Code hooks, sends `zellij pipe --name claude-status -- '{"pane_id":"...","state":"..."}'`
+3. **Zsh wrapper** (`claude-monitor.zsh`) — wraps the `claude` command to send an `exit` state when the session ends
 
-Just run `claude` or `cursor-agent` as usual inside Zellij. The tab name updates automatically.
+State changes are event-driven via Claude Code hooks — no polling, no screen scraping, no file-based state, no locking.
 
-### Configuration
-
-All settings are optional environment variables:
+## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AI_TAB_POLL_INTERVAL` | `1` | Seconds between screen checks (Cursor Agent only) |
-| `AI_TAB_WAITING_ICON` | `🟡` | Icon for waiting state |
-| `AI_TAB_WORKING_ICON` | `🔵` | Icon for working state |
-| `AI_TAB_IDLE_ICON` | `🟢` | Icon for idle state |
+| `ZELLIJ_PLUGIN_DIR` | `~/.config/zellij/plugins` | Custom install directory |
 
-Example:
+## Uninstall
 
-```zsh
-export AI_TAB_POLL_INTERVAL=2
-export AI_TAB_IDLE_ICON="⚪"
-source ~/.config/zellij/plugins/ai-tab-monitor.zsh
+```sh
+curl -fsSL https://raw.githubusercontent.com/morphet81/zellij-plugins/main/uninstall.sh | bash
 ```
 
-### Requirements
+## Building from Source
 
-- [Zellij](https://zellij.dev/) terminal multiplexer
+Requires Rust with the `wasm32-wasip1` target:
+
+```sh
+rustup target add wasm32-wasip1
+cd plugin
+cargo build --release --target wasm32-wasip1
+# Output: target/wasm32-wasip1/release/claude-tab-monitor.wasm
+```
+
+## Troubleshooting
+
+**Tab name not updating:**
+- Verify you are inside Zellij (`echo $ZELLIJ`)
+- Check the plugin is loaded (`zellij plugin -- file:~/.config/zellij/plugins/claude-tab-monitor.wasm`)
+- Verify hooks are configured: `grep hook.sh ~/.claude/settings.json`
+
+**Icon stuck after Claude exits:**
+- The zsh wrapper sends an exit event on session end; if Claude was killed with SIGKILL, cleanup may not fire
+- Run `zellij action rename-tab "your-tab-name"` to manually restore
+
+**Hooks not firing:**
+- Ensure Claude Code version supports hooks
+- Check `~/.claude/settings.json` is valid JSON (`jq . ~/.claude/settings.json`)
+
+## Requirements
+
+- [Zellij](https://zellij.dev/) 0.40+
 - zsh
-- For Claude Code hooks: Claude Code with hooks support
-- For Cursor Agent: `md5` (macOS) or `md5sum` (Linux)
+- Claude Code with hooks support
+- `jq` (for automatic hooks setup during install)
