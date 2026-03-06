@@ -26,12 +26,31 @@ typeset -g __ATM_HOOK="${0:A:h}/ai-tab-monitor-hook.sh"
 
 # --- Shared helpers --------------------------------------------------------
 
+# Get the tab name for the current pane (by ZELLIJ_PANE_ID), not the focused tab.
+# This prevents capturing the wrong tab name when another tab is focused.
 __atm_get_tab_name() {
-    local raw
-    raw=$(zellij action dump-layout 2>/dev/null \
-        | grep -E 'tab.*focus=true' \
-        | head -1 \
-        | sed 's/.*name="\([^"]*\)".*/\1/')
+    local layout raw
+    layout=$(zellij action dump-layout 2>/dev/null) || return
+
+    raw=$(printf '%s' "$layout" | awk -v pid="$ZELLIJ_PANE_ID" '
+        /^[[:space:]]*(tab|fake_tab) / {
+            if (match($0, /name="([^"]*)"/, m)) {
+                current_tab = m[1]
+            }
+        }
+        {
+            pattern = "id=" pid
+            idx = index($0, pattern)
+            if (idx > 0) {
+                rest = substr($0, idx + length(pattern), 1)
+                if (rest == "" || rest !~ /[0-9]/) {
+                    print current_tab
+                    exit
+                }
+            }
+        }
+    ')
+
     # Strip known icon prefixes (handles multi-byte emoji correctly)
     if [[ "$raw" == (🟢|🔵|🟡)\ * ]]; then
         raw="${raw#* }"
