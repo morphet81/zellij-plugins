@@ -50,7 +50,7 @@ if [[ -n "$SHELL_RC" ]]; then
     if grep -qF "ai-tab-monitor.zsh" "$SHELL_RC" 2>/dev/null; then
         echo "Already sourced in ${SHELL_RC}"
     else
-        read -rp "Add source line to ${SHELL_RC}? [Y/n] " answer
+        read -rp "Add source line to ${SHELL_RC}? [Y/n] " answer </dev/tty 2>/dev/null || answer="Y"
         answer="${answer:-Y}"
         if [[ "$answer" =~ ^[Yy] ]]; then
             echo "" >> "$SHELL_RC"
@@ -93,7 +93,7 @@ setup_hooks() {
         return
     fi
 
-    read -rp "Add Claude Code hooks to ${CLAUDE_SETTINGS}? [Y/n] " answer
+    read -rp "Add Claude Code hooks to ${CLAUDE_SETTINGS}? [Y/n] " answer </dev/tty 2>/dev/null || answer="Y"
     answer="${answer:-Y}"
     if [[ ! "$answer" =~ ^[Yy] ]]; then
         echo "Skipped hooks setup. See README for manual configuration."
