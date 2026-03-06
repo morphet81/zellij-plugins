@@ -141,6 +141,20 @@ case "$STATE" in
     *) exit 0 ;;
 esac
 
+# Guard: "idle" must not override "waiting". The Stop hook fires right after
+# Notification(permission_prompt), and its "idle" would overwrite the yellow
+# pill. A waiting-lock file lets us skip exactly one spurious "idle".
+WAITING_LOCK="${STATE_DIR}/pane-${ZELLIJ_PANE_ID}.waiting-lock"
+
+if [ "$STATE" = "waiting" ]; then
+    touch "$WAITING_LOCK" 2>/dev/null
+elif [ "$STATE" = "idle" ] && [ -f "$WAITING_LOCK" ]; then
+    rm -f "$WAITING_LOCK" 2>/dev/null
+    exit 0
+else
+    rm -f "$WAITING_LOCK" 2>/dev/null
+fi
+
 # Skip rename if state unchanged
 if [ -f "$STATE_FILE" ] && [ "$(cat "$STATE_FILE" 2>/dev/null)" = "$STATE" ]; then
     exit 0

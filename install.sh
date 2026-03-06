@@ -125,9 +125,6 @@ setup_hooks() {
         | .hooks.PostToolUse = ((.hooks.PostToolUse // []) + [
             {"matcher": "", "hooks": [{"type": "command", "command": ($hook_cmd + " working")}]}
           ])
-        | .hooks.Stop = ((.hooks.Stop // []) + [
-            {"matcher": "", "hooks": [{"type": "command", "command": ($hook_cmd + " idle")}]}
-          ])
         | .hooks.SessionEnd = ((.hooks.SessionEnd // []) + [
             {"matcher": "", "hooks": [{"type": "command", "command": ($hook_cmd + " cleanup")}]}
           ])
