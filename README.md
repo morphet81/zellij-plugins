@@ -20,9 +20,8 @@ curl -fsSL https://raw.githubusercontent.com/morphet81/zellij-plugins/main/insta
 ```
 
 The install script will:
-1. Download `claude-tab-monitor.wasm`, `hook.sh`, and `claude-monitor.zsh` to `~/.config/zellij/plugins/`
-2. Offer to add the source line to your `.zshrc`
-3. Offer to configure Claude Code hooks in `~/.claude/settings.json` (requires `jq`)
+1. Download `claude-tab-monitor.wasm` and `hook.sh` to `~/.config/zellij/plugins/`
+2. Offer to configure Claude Code hooks in `~/.claude/settings.json` (requires `jq`)
 
 ## Manual Install
 
@@ -33,19 +32,10 @@ mkdir -p ~/.config/zellij/plugins
 curl -fsSL https://github.com/morphet81/zellij-plugins/releases/latest/download/claude-tab-monitor.wasm \
   -o ~/.config/zellij/plugins/claude-tab-monitor.wasm
 
-# Download the hook script and zsh wrapper
+# Download the hook script
 curl -fsSL https://raw.githubusercontent.com/morphet81/zellij-plugins/main/hook.sh \
   -o ~/.config/zellij/plugins/hook.sh
 chmod +x ~/.config/zellij/plugins/hook.sh
-
-curl -fsSL https://raw.githubusercontent.com/morphet81/zellij-plugins/main/claude-monitor.zsh \
-  -o ~/.config/zellij/plugins/claude-monitor.zsh
-```
-
-Then add to your `.zshrc`:
-
-```zsh
-source ~/.config/zellij/plugins/claude-monitor.zsh
 ```
 
 ## Loading the Plugin
@@ -87,6 +77,9 @@ Add these hooks to `~/.claude/settings.json` (the install script does this autom
       {"matcher": "permission_prompt", "hooks": [{"type": "command", "command": "$HOME/.config/zellij/plugins/hook.sh waiting"}]},
       {"matcher": "idle_prompt", "hooks": [{"type": "command", "command": "$HOME/.config/zellij/plugins/hook.sh idle"}]},
       {"matcher": "elicitation_dialog", "hooks": [{"type": "command", "command": "$HOME/.config/zellij/plugins/hook.sh waiting"}]}
+    ],
+    "SessionEnd": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "$HOME/.config/zellij/plugins/hook.sh exit"}]}
     ]
   }
 }
@@ -95,10 +88,9 @@ Add these hooks to `~/.claude/settings.json` (the install script does this autom
 ## How It Works
 
 1. **WASM Plugin** (`claude-tab-monitor.wasm`) — runs inside Zellij, subscribes to tab/pane events, receives state updates via `zellij pipe`, tracks state per pane, aggregates per tab, renames tabs with pill prefixes
-2. **Hook script** (`hook.sh`) — 14-line POSIX shell script called by Claude Code hooks, sends `zellij pipe --name claude-status -- '{"pane_id":"...","state":"..."}'`
-3. **Zsh wrapper** (`claude-monitor.zsh`) — wraps the `claude` command to send an `exit` state when the session ends
+2. **Hook script** (`hook.sh`) — 13-line POSIX shell script called by Claude Code hooks (including `SessionEnd`), sends `zellij pipe --name claude-status -- '{"pane_id":"...","state":"..."}'`
 
-State changes are event-driven via Claude Code hooks — no polling, no screen scraping, no file-based state, no locking.
+State changes are event-driven via Claude Code hooks — no polling, no screen scraping, no file-based state, no zsh wrapper, no locking.
 
 ## Configuration
 
@@ -141,6 +133,5 @@ cargo build --release --target wasm32-wasip1
 ## Requirements
 
 - [Zellij](https://zellij.dev/) 0.40+
-- zsh
 - Claude Code with hooks support
 - `jq` (for automatic hooks setup during install)

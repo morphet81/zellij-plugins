@@ -94,29 +94,20 @@ else
     info "No Claude Code hooks to remove."
 fi
 
-# --- Remove source line from .zshrc ---
-SHELL_RC=""
-if [[ -n "${ZSH_VERSION:-}" ]] || [[ "$SHELL" == */zsh ]]; then
-    SHELL_RC="${HOME}/.zshrc"
-fi
-
-if [[ -n "$SHELL_RC" ]] && [[ -f "$SHELL_RC" ]]; then
-    if grep -qF "claude-monitor.zsh" "$SHELL_RC" 2>/dev/null; then
-        if confirm "Remove source line from ${SHELL_RC}?"; then
-            sed -i.bak '/# Claude Tab Monitor/d;/claude-monitor\.zsh/d' "$SHELL_RC"
-            rm -f "${SHELL_RC}.bak"
-            success "Removed source line from ${SHELL_RC}"
-        else
-            warn "Skipped removing source line."
+# --- Remove source line from .zshrc (legacy cleanup) ---
+for rc_file in "${HOME}/.zshrc"; do
+    if [[ -f "$rc_file" ]] && grep -qE "claude-monitor\.zsh|ai-tab-monitor\.zsh" "$rc_file" 2>/dev/null; then
+        if confirm "Remove legacy source line from ${rc_file}?"; then
+            sed -i.bak '/# Claude Tab Monitor/d;/claude-monitor\.zsh/d;/ai-tab-monitor\.zsh/d' "$rc_file"
+            rm -f "${rc_file}.bak"
+            success "Removed source line from ${rc_file}"
         fi
-    else
-        info "No source line found in ${SHELL_RC}"
     fi
-fi
+done
 
 # --- Remove plugin files ---
 removed=false
-for f in claude-tab-monitor.wasm hook.sh claude-monitor.zsh; do
+for f in claude-tab-monitor.wasm hook.sh; do
     if [[ -f "${INSTALL_DIR}/${f}" ]]; then
         rm -f "${INSTALL_DIR}/${f}"
         removed=true

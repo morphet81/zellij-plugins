@@ -94,35 +94,6 @@ curl -fsSL "${RAW_URL}/hook.sh" -o "${INSTALL_DIR}/hook.sh"
 chmod +x "${INSTALL_DIR}/hook.sh"
 success "Downloaded hook.sh"
 
-curl -fsSL "${RAW_URL}/claude-monitor.zsh" -o "${INSTALL_DIR}/claude-monitor.zsh"
-success "Downloaded claude-monitor.zsh"
-
-# --- Source line in .zshrc ---
-echo ""
-SHELL_RC=""
-if [[ -n "${ZSH_VERSION:-}" ]] || [[ "$SHELL" == */zsh ]]; then
-    SHELL_RC="${HOME}/.zshrc"
-fi
-
-SOURCE_LINE="source \"${INSTALL_DIR}/claude-monitor.zsh\""
-
-if [[ -n "$SHELL_RC" ]]; then
-    if grep -qF "claude-monitor.zsh" "$SHELL_RC" 2>/dev/null; then
-        success "Already sourced in ${SHELL_RC}"
-    elif confirm "Add source line to ${SHELL_RC}?"; then
-        echo "" >> "$SHELL_RC"
-        echo "# Claude Tab Monitor - Zellij plugin" >> "$SHELL_RC"
-        echo "${SOURCE_LINE}" >> "$SHELL_RC"
-        success "Added source line to ${SHELL_RC}"
-    else
-        warn "Skipped. Add manually:"
-        echo "  ${SOURCE_LINE}"
-    fi
-else
-    warn "Non-zsh shell detected. Add this to your shell rc file:"
-    echo "  ${SOURCE_LINE}"
-fi
-
 # --- Claude Code hooks in settings.json ---
 echo ""
 CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
@@ -168,6 +139,9 @@ setup_hooks() {
             {"matcher": "idle_prompt", "hooks": [{"type": "command", "command": ($hook_cmd + " idle")}]},
             {"matcher": "elicitation_dialog", "hooks": [{"type": "command", "command": ($hook_cmd + " waiting")}]}
           ])
+        | .hooks.SessionEnd = ((.hooks.SessionEnd // []) + [
+            {"matcher": "", "hooks": [{"type": "command", "command": ($hook_cmd + " exit")}]}
+          ])
     ' "$CLAUDE_SETTINGS" > "${CLAUDE_SETTINGS}.tmp" && mv "${CLAUDE_SETTINGS}.tmp" "$CLAUDE_SETTINGS"
 
     success "Added Claude Code hooks to ${CLAUDE_SETTINGS}"
@@ -185,5 +159,4 @@ echo ""
 echo -e "${CYAN}Or add it to your Zellij layout:${NC}"
 echo "  pane plugin location=\"file:${INSTALL_DIR}/claude-tab-monitor.wasm\""
 echo ""
-echo -e "${CYAN}Then restart your shell or run:${NC}"
-echo "  source \"${INSTALL_DIR}/claude-monitor.zsh\""
+echo -e "${CYAN}Grant the plugin permissions when prompted.${NC}"
