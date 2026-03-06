@@ -55,18 +55,28 @@ state_to_icon() {
 
 # --- Locking (prevents concurrent rename-tab calls) ------------------------
 
-# Clean stale locks older than 5 seconds
-if [ -d "$LOCK_DIR" ]; then
+# Acquire lock with retry — hooks fire nearly simultaneously and the old
+# "fail immediately" approach silently dropped events (e.g. Notification
+# lost while PostToolUse held the lock).
+lock_acquired=false
+for _i in 1 2 3 4 5 6 7 8 9 10; do
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+        lock_acquired=true
+        break
+    fi
+    sleep 0.05
+done
+
+# If still locked, try clearing a stale lock (older than ~5 seconds)
+if [ "$lock_acquired" = false ] && [ -d "$LOCK_DIR" ]; then
     lock_age=$(find "$LOCK_DIR" -maxdepth 0 -mmin +0.08 2>/dev/null)
     if [ -n "$lock_age" ]; then
         rmdir "$LOCK_DIR" 2>/dev/null
+        mkdir "$LOCK_DIR" 2>/dev/null && lock_acquired=true
     fi
 fi
 
-# Acquire lock (mkdir is atomic)
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    exit 0
-fi
+[ "$lock_acquired" = true ] || exit 0
 
 # Release lock on exit
 trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
