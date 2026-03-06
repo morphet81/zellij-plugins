@@ -58,6 +58,28 @@ __atm_capture_orig_name() {
     fi
 }
 
+# --- Precmd: restore stale icons when switching to a tab -------------------
+
+__atm_precmd_refresh() {
+    [[ -n "$ZELLIJ" ]] || return
+    local state_dir="/tmp/ai-tab-monitor-${ZELLIJ_SESSION_NAME}"
+
+    # Check for pending restore (cleanup couldn't rename because tab wasn't focused)
+    if [[ -f "${state_dir}/restore-pending" ]]; then
+        local pending_name
+        pending_name=$(<"${state_dir}/restore-pending")
+        local current_tab
+        current_tab=$(__atm_get_tab_name)
+        if [[ "$pending_name" == "$current_tab" ]]; then
+            zellij action rename-tab "$pending_name" 2>/dev/null
+            rm -f "${state_dir}/restore-pending" 2>/dev/null
+        fi
+    fi
+}
+
+autoload -Uz add-zsh-hook
+add-zsh-hook precmd __atm_precmd_refresh
+
 # --- Claude Code (hook-driven, no polling) ---------------------------------
 
 claude() {
