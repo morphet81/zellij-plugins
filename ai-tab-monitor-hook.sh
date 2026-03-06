@@ -13,15 +13,43 @@ STATE="${1:-idle}"
 STATE_DIR="/tmp/ai-tab-monitor-${ZELLIJ_SESSION_NAME}"
 STATE_FILE="${STATE_DIR}/pane-${ZELLIJ_PANE_ID}.state"
 ORIG_FILE="${STATE_DIR}/pane-${ZELLIJ_PANE_ID}.orig"
+LOCK_DIR="${STATE_DIR}/hook.lock"
+
+# --- Locking (prevents concurrent rename-tab calls) ----------------------
+
+# Clean stale locks older than 5 seconds
+if [ -d "$LOCK_DIR" ]; then
+    lock_age=$(find "$LOCK_DIR" -maxdepth 0 -mmin +0.08 2>/dev/null)
+    if [ -n "$lock_age" ]; then
+        rmdir "$LOCK_DIR" 2>/dev/null
+    fi
+fi
+
+# Acquire lock (mkdir is atomic)
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    exit 0
+fi
+
+# Release lock on exit
+trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+
+# --- Cleanup --------------------------------------------------------------
 
 if [ "$STATE" = "cleanup" ]; then
-    rm -f "$STATE_FILE" 2>/dev/null
+    orig=$(cat "$ORIG_FILE" 2>/dev/null)
+    rm -f "$STATE_FILE" "$ORIG_FILE" 2>/dev/null
     # Restore tab name if no active monitors remain
     if ! ls "$STATE_DIR"/pane-*.state >/dev/null 2>&1; then
-        zellij action undo-rename-tab 2>/dev/null
+        if [ -n "$orig" ]; then
+            zellij action rename-tab "$orig" 2>/dev/null
+        else
+            zellij action undo-rename-tab 2>/dev/null
+        fi
     fi
     exit 0
 fi
+
+# --- State update ---------------------------------------------------------
 
 case "$STATE" in
     working|waiting|idle) ;;
@@ -36,9 +64,10 @@ fi
 mkdir -p "$STATE_DIR" 2>/dev/null
 printf '%s' "$STATE" > "$STATE_FILE"
 
-# Read original tab name
+# Read original tab name — bail if empty (don't rename to just an icon)
 orig=""
 [ -f "$ORIG_FILE" ] && orig=$(cat "$ORIG_FILE" 2>/dev/null)
+[ -z "$orig" ] && exit 0
 
 # Aggregate across all panes: waiting > working > idle
 overall="idle"

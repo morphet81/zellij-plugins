@@ -32,8 +32,11 @@ __atm_get_tab_name() {
         | grep -E 'tab.*focus=true' \
         | head -1 \
         | sed 's/.*name="\([^"]*\)".*/\1/')
-    # Strip leftover icon prefix from a previous crashed session
-    echo "${raw}" | sed 's/^[🟢🔵🟡] //'
+    # Strip known icon prefixes (handles multi-byte emoji correctly)
+    if [[ "$raw" == (🟢|🔵|🟡)\ * ]]; then
+        raw="${raw#* }"
+    fi
+    echo "${raw}"
 }
 
 __atm_capture_orig_name() {
@@ -41,7 +44,17 @@ __atm_capture_orig_name() {
     local orig_file="${state_dir}/pane-${ZELLIJ_PANE_ID}.orig"
     if [[ ! -f "$orig_file" ]]; then
         mkdir -p "$state_dir" 2>/dev/null
-        __atm_get_tab_name > "$orig_file"
+        local name
+        name=$(__atm_get_tab_name)
+        # Retry once if empty (dump-layout can transiently fail)
+        if [[ -z "$name" ]]; then
+            sleep 0.2
+            name=$(__atm_get_tab_name)
+        fi
+        # Only write if we got a non-empty name
+        if [[ -n "$name" ]]; then
+            printf '%s' "$name" > "$orig_file"
+        fi
     fi
 }
 
