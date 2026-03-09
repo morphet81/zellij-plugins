@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use zellij_tile::prelude::*;
 
 /// Pill icons prepended to tab names to indicate AI session state.
@@ -55,6 +55,14 @@ struct State {
 
     /// Tab position -> current tab name from TabInfo (may include our pill).
     tab_names: BTreeMap<usize, String>,
+
+    /// Tab position -> last name we asked rename_tab() to set.
+    /// This is the stable guard against event cascades — never cleared by TabUpdate.
+    desired_tab_names: BTreeMap<usize, String>,
+
+    /// Set to true when TabUpdate fires (positions may have shifted).
+    /// Cleared when PaneUpdate rebuilds the pane-to-tab mapping.
+    pane_positions_stale: bool,
 }
 
 impl State {
@@ -85,25 +93,21 @@ impl State {
         best
     }
 
-    /// Recompute and apply tab names for all tabs that have tracked panes
-    /// or had tracked panes (need restoration).
-    fn update_all_tab_names(&self) {
-        let mut affected_tabs: BTreeMap<usize, ()> = BTreeMap::new();
+    /// Recompute and apply tab names only for tabs that have active tracked panes.
+    fn update_all_tab_names(&mut self) {
+        let mut affected_tabs: BTreeSet<usize> = BTreeSet::new();
         for (&pane_id, _) in &self.pane_states {
             if let Some(&tab_pos) = self.pane_to_tab_position.get(&pane_id) {
-                affected_tabs.insert(tab_pos, ());
+                affected_tabs.insert(tab_pos);
             }
         }
-        for (&tab_pos, _) in &self.original_tab_names {
-            affected_tabs.insert(tab_pos, ());
-        }
-        for &tab_pos in affected_tabs.keys() {
+        for &tab_pos in &affected_tabs {
             self.update_tab_name(tab_pos);
         }
     }
 
     /// Update a single tab's name based on its aggregate pane state.
-    fn update_tab_name(&self, tab_position: usize) {
+    fn update_tab_name(&mut self, tab_position: usize) {
         let original = match self.original_tab_names.get(&tab_position) {
             Some(name) => name,
             None => return,
@@ -114,25 +118,21 @@ impl State {
             None => original.clone(),
         };
 
-        // Only rename if the current name differs from desired.
-        if let Some(current) = self.tab_names.get(&tab_position) {
-            if *current == desired {
-                return;
-            }
-        }
-
-        rename_tab(tab_position as u32, &desired);
-    }
-
-    /// Record the original tab name for a tab position if not already captured.
-    fn capture_original_name(&mut self, tab_position: usize) {
-        if self.original_tab_names.contains_key(&tab_position) {
+        // Guard: skip if the tab already shows the desired name.
+        if self.tab_names.get(&tab_position) == Some(&desired) {
+            self.desired_tab_names.insert(tab_position, desired);
             return;
         }
-        if let Some(current_name) = self.tab_names.get(&tab_position) {
-            let clean = Self::strip_pill(current_name).to_string();
-            self.original_tab_names.insert(tab_position, clean);
+
+        // Guard: skip if we already asked rename_tab() for this exact name.
+        if self.desired_tab_names.get(&tab_position) == Some(&desired) {
+            return;
         }
+
+        self.desired_tab_names.insert(tab_position, desired.clone());
+        self.tab_names.insert(tab_position, desired.clone());
+        // rename_tab expects 1-based tab index, but tab_position is 0-based.
+        rename_tab(tab_position as u32 + 1, &desired);
     }
 }
 
@@ -155,10 +155,28 @@ impl ZellijPlugin for State {
         match event {
             Event::TabUpdate(tabs) => {
                 self.tab_names.clear();
+                let mut valid_positions: BTreeSet<usize> = BTreeSet::new();
+
                 for tab in &tabs {
                     self.tab_names.insert(tab.position, tab.name.clone());
+                    valid_positions.insert(tab.position);
+
+                    // Only update original name for tabs we're already tracking
+                    // (i.e., tabs that have or had Claude sessions).
+                    if self.original_tab_names.contains_key(&tab.position) {
+                        let clean = Self::strip_pill(&tab.name).to_string();
+                        self.original_tab_names.insert(tab.position, clean);
+                    }
                 }
-                self.update_all_tab_names();
+
+                // Clean up entries for tabs that no longer exist.
+                self.original_tab_names
+                    .retain(|pos, _| valid_positions.contains(pos));
+                self.desired_tab_names
+                    .retain(|pos, _| valid_positions.contains(pos));
+
+                // Mark pane positions as stale — they may reference old tab positions.
+                self.pane_positions_stale = true;
             }
             Event::PaneUpdate(manifest) => {
                 self.pane_to_tab_position.clear();
@@ -170,7 +188,14 @@ impl ZellijPlugin for State {
                         self.pane_to_tab_position.insert(pane.id, tab_position);
                     }
                 }
-                self.update_all_tab_names();
+
+                // If tab positions shifted since last PaneUpdate, re-apply names.
+                let was_stale = self.pane_positions_stale;
+                self.pane_positions_stale = false;
+
+                if was_stale && !self.pane_states.is_empty() {
+                    self.update_all_tab_names();
+                }
             }
             Event::PermissionRequestResult(_) => {}
             _ => {}
@@ -179,6 +204,9 @@ impl ZellijPlugin for State {
     }
 
     fn pipe(&mut self, pipe_message: PipeMessage) -> bool {
+        // Unblock the CLI pipe so `zellij pipe` returns immediately.
+        unblock_cli_pipe_input(&pipe_message.name);
+
         if pipe_message.name != "claude-status" {
             return false;
         }
@@ -209,8 +237,11 @@ impl ZellijPlugin for State {
                         self.update_tab_name(tab_pos);
                     } else {
                         // Restore original name and stop tracking.
-                        if let Some(original) = self.original_tab_names.remove(&tab_pos) {
-                            rename_tab(tab_pos as u32, &original);
+                        if let Some(original) = self.original_tab_names.get(&tab_pos) {
+                            let original = original.clone();
+                            self.desired_tab_names.insert(tab_pos, original.clone());
+                            self.tab_names.insert(tab_pos, original.clone());
+                            rename_tab(tab_pos as u32 + 1, &original);
                         }
                     }
                 }
@@ -223,14 +254,16 @@ impl ZellijPlugin for State {
                     _ => return false,
                 };
 
-                // Capture original tab name on first interaction with this tab.
-                if let Some(&tab_pos) = self.pane_to_tab_position.get(&pane_id) {
-                    self.capture_original_name(tab_pos);
-                }
-
                 self.pane_states.insert(pane_id, state);
 
                 if let Some(&tab_pos) = self.pane_to_tab_position.get(&pane_id) {
+                    // Capture the original tab name on first track.
+                    if !self.original_tab_names.contains_key(&tab_pos) {
+                        if let Some(current_name) = self.tab_names.get(&tab_pos) {
+                            let clean = Self::strip_pill(current_name).to_string();
+                            self.original_tab_names.insert(tab_pos, clean);
+                        }
+                    }
                     self.update_tab_name(tab_pos);
                 }
             }
