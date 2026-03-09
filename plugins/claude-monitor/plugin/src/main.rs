@@ -189,11 +189,23 @@ impl ZellijPlugin for State {
                     }
                 }
 
-                // If tab positions shifted since last PaneUpdate, re-apply names.
-                let was_stale = self.pane_positions_stale;
+                // Re-apply pill names when tab positions shifted OR when we have
+                // tracked pane states that haven't been applied yet (e.g. pipe
+                // message arrived before the first PaneUpdate mapped the pane).
                 self.pane_positions_stale = false;
 
-                if was_stale && !self.pane_states.is_empty() {
+                if !self.pane_states.is_empty() {
+                    // Capture original tab names for any newly-mapped panes.
+                    for (&pane_id, _) in &self.pane_states {
+                        if let Some(&tab_pos) = self.pane_to_tab_position.get(&pane_id) {
+                            if !self.original_tab_names.contains_key(&tab_pos) {
+                                if let Some(current_name) = self.tab_names.get(&tab_pos) {
+                                    let clean = Self::strip_pill(current_name).to_string();
+                                    self.original_tab_names.insert(tab_pos, clean);
+                                }
+                            }
+                        }
+                    }
                     self.update_all_tab_names();
                 }
             }

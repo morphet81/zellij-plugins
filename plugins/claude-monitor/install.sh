@@ -95,7 +95,7 @@ jq --arg hook_cmd "$HOOK_CMD" '
         {"matcher": "", "hooks": [{"type": "command", "command": ($hook_cmd + " working")}]}
       ])
     | .hooks.Stop = ((.hooks.Stop // []) + [
-        {"matcher": "", "hooks": [{"type": "command", "command": ($hook_cmd + " exit")}]}
+        {"matcher": "", "hooks": [{"type": "command", "command": ($hook_cmd + " idle")}]}
       ])
     | .hooks.Notification = ((.hooks.Notification // []) + [
         {"matcher": "permission_prompt", "hooks": [{"type": "command", "command": ($hook_cmd + " waiting")}]},
