@@ -26,9 +26,6 @@ Options:
   -d, --dir <path>   Install directory (default: ~/.config/zellij/plugins)
   -y, --yes          Skip confirmation prompts
   -h, --help         Show this help
-
-One-liner:
-  curl -fsSL https://raw.githubusercontent.com/morphet81/zellij-plugins/main/uninstall.sh | bash
 EOF
 }
 
@@ -42,7 +39,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Prompt helper: returns 0 for yes, 1 for no
 confirm() {
     local prompt="$1"
     if $AUTO_YES; then
@@ -71,7 +67,6 @@ CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
 if [[ -f "$CLAUDE_SETTINGS" ]] && grep -qF "hook.sh" "$CLAUDE_SETTINGS" 2>/dev/null; then
     if command -v jq >/dev/null 2>&1; then
         if confirm "Remove Claude Code hooks from ${CLAUDE_SETTINGS}?"; then
-            # Remove any hook entry whose command contains our hook script
             jq '
                 .hooks |= (if . then
                     with_entries(
@@ -94,20 +89,19 @@ else
     info "No Claude Code hooks to remove."
 fi
 
-# --- Remove source line from .zshrc (legacy cleanup) ---
-for rc_file in "${HOME}/.zshrc"; do
-    if [[ -f "$rc_file" ]] && grep -qE "claude-monitor\.zsh|ai-tab-monitor\.zsh" "$rc_file" 2>/dev/null; then
-        if confirm "Remove legacy source line from ${rc_file}?"; then
-            sed -i.bak '/# Claude Tab Monitor/d;/claude-monitor\.zsh/d;/ai-tab-monitor\.zsh/d' "$rc_file"
-            rm -f "${rc_file}.bak"
-            success "Removed source line from ${rc_file}"
-        fi
+# --- Remove legacy source lines from .zshrc ---
+if [[ -f "${HOME}/.zshrc" ]] && grep -qE "claude-monitor\.zsh|ai-tab-monitor\.zsh" "${HOME}/.zshrc" 2>/dev/null; then
+    if confirm "Remove legacy source line from ~/.zshrc?"; then
+        sed -i.bak '/# Claude Tab Monitor/d;/claude-monitor\.zsh/d;/ai-tab-monitor\.zsh/d' "${HOME}/.zshrc"
+        rm -f "${HOME}/.zshrc.bak"
+        success "Removed legacy source line from ~/.zshrc"
     fi
-done
+fi
 
 # --- Remove plugin files ---
+echo ""
 removed=false
-for f in claude-tab-monitor.wasm hook.sh; do
+for f in claude-tab-monitor.wasm hook.sh claude-monitor.zsh ai-tab-monitor.zsh ai-tab-monitor-hook.sh; do
     if [[ -f "${INSTALL_DIR}/${f}" ]]; then
         rm -f "${INSTALL_DIR}/${f}"
         removed=true
@@ -115,21 +109,12 @@ for f in claude-tab-monitor.wasm hook.sh; do
     fi
 done
 
-# Also clean up old file names from previous versions
-for f in ai-tab-monitor.zsh ai-tab-monitor-hook.sh; do
-    if [[ -f "${INSTALL_DIR}/${f}" ]]; then
-        rm -f "${INSTALL_DIR}/${f}"
-        removed=true
-        success "Removed legacy file ${INSTALL_DIR}/${f}"
-    fi
-done
-
 if ! $removed; then
     info "No plugin files found in ${INSTALL_DIR}"
 fi
 
-# --- Clean up temp state files ---
+# --- Clean up legacy temp state files ---
 rm -rf /tmp/ai-tab-monitor-* 2>/dev/null || true
 
 echo ""
-success "Uninstall complete! Restart your shell to finish."
+success "Uninstall complete!"

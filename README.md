@@ -38,24 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/morphet81/zellij-plugins/main/hook.
 chmod +x ~/.config/zellij/plugins/hook.sh
 ```
 
-## Loading the Plugin
-
-The WASM plugin must be running in your Zellij session. Add it to your layout:
-
-```kdl
-layout {
-    pane size=1 borderless=true {
-        plugin location="file:~/.config/zellij/plugins/claude-tab-monitor.wasm"
-    }
-    pane
-}
-```
-
-Or load it manually:
-
-```sh
-zellij plugin -- file:~/.config/zellij/plugins/claude-tab-monitor.wasm
-```
+The plugin auto-launches when Claude Code hooks first fire — no layout changes needed. Zellij will prompt for plugin permissions on first use (grant ReadApplicationState + ChangeApplicationState).
 
 ## Claude Code Hooks
 

@@ -18,6 +18,7 @@ REPO="morphet81/zellij-plugins"
 RAW_URL="https://raw.githubusercontent.com/${REPO}/main"
 RELEASE_URL="https://github.com/${REPO}/releases/latest/download"
 INSTALL_DIR="${ZELLIJ_PLUGIN_DIR:-${HOME}/.config/zellij/plugins}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
     cat <<EOF
@@ -30,7 +31,10 @@ Options:
   -y, --yes          Skip confirmation prompts
   -h, --help         Show this help
 
-One-liner:
+Local install (from repo checkout):
+  ./install.sh
+
+Remote install:
   curl -fsSL ${RAW_URL}/install.sh | bash
 EOF
 }
@@ -45,7 +49,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Prompt helper: returns 0 for yes, 1 for no
 confirm() {
     local prompt="$1"
     if $AUTO_YES; then
@@ -65,6 +68,11 @@ confirm() {
     [[ "$answer" =~ ^[Yy] ]]
 }
 
+# --- Detect local repo ---
+is_local_repo() {
+    [[ -f "${SCRIPT_DIR}/hook.sh" ]] && [[ -d "${SCRIPT_DIR}/plugin" ]]
+}
+
 echo -e "${BOLD}Claude Tab Monitor - Installer${NC}"
 echo ""
 
@@ -75,29 +83,73 @@ if ! command -v zellij >/dev/null 2>&1; then
 fi
 success "zellij found: $(zellij --version 2>/dev/null || echo 'unknown version')"
 
-if ! command -v curl >/dev/null 2>&1; then
-    error "curl is required but not found."
-    exit 1
-fi
-
 # --- Create plugin directory ---
 info "Install directory: ${INSTALL_DIR}"
 mkdir -p "$INSTALL_DIR"
 
-# --- Download files ---
-info "Downloading plugin files..."
+# --- Install files ---
+if is_local_repo; then
+    info "Local repo detected at ${SCRIPT_DIR}"
 
-curl -fsSL "${RELEASE_URL}/claude-tab-monitor.wasm" -o "${INSTALL_DIR}/claude-tab-monitor.wasm"
-success "Downloaded claude-tab-monitor.wasm"
+    # --- Build WASM plugin if needed ---
+    WASM_FILE="${SCRIPT_DIR}/plugin/target/wasm32-wasip1/release/claude-tab-monitor.wasm"
 
-curl -fsSL "${RAW_URL}/hook.sh" -o "${INSTALL_DIR}/hook.sh"
-chmod +x "${INSTALL_DIR}/hook.sh"
-success "Downloaded hook.sh"
+    if [[ -f "$WASM_FILE" ]]; then
+        success "WASM plugin already built"
+    else
+        info "Building WASM plugin..."
+
+        # Check for Rust toolchain
+        if ! command -v cargo >/dev/null 2>&1; then
+            if [[ -f "${HOME}/.cargo/env" ]]; then
+                source "${HOME}/.cargo/env"
+            fi
+        fi
+
+        if ! command -v cargo >/dev/null 2>&1; then
+            error "Rust toolchain not found. Install it with:"
+            echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+            echo "  rustup target add wasm32-wasip1"
+            exit 1
+        fi
+
+        # Ensure wasm32-wasip1 target is available
+        if ! rustup target list --installed 2>/dev/null | grep -q wasm32-wasip1; then
+            info "Adding wasm32-wasip1 target..."
+            rustup target add wasm32-wasip1
+        fi
+
+        (cd "${SCRIPT_DIR}/plugin" && cargo build --release --target wasm32-wasip1)
+        success "Built WASM plugin"
+    fi
+
+    cp "$WASM_FILE" "${INSTALL_DIR}/claude-tab-monitor.wasm"
+    success "Installed claude-tab-monitor.wasm"
+
+    cp "${SCRIPT_DIR}/hook.sh" "${INSTALL_DIR}/hook.sh"
+    chmod +x "${INSTALL_DIR}/hook.sh"
+    success "Installed hook.sh"
+
+else
+    info "Downloading plugin files from GitHub..."
+
+    if ! command -v curl >/dev/null 2>&1; then
+        error "curl is required for remote install."
+        exit 1
+    fi
+
+    curl -fsSL "${RELEASE_URL}/claude-tab-monitor.wasm" -o "${INSTALL_DIR}/claude-tab-monitor.wasm"
+    success "Downloaded claude-tab-monitor.wasm"
+
+    curl -fsSL "${RAW_URL}/hook.sh" -o "${INSTALL_DIR}/hook.sh"
+    chmod +x "${INSTALL_DIR}/hook.sh"
+    success "Downloaded hook.sh"
+fi
 
 # --- Claude Code hooks in settings.json ---
 echo ""
 CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
-HOOK_CMD="\$HOME/.config/zellij/plugins/hook.sh"
+HOOK_CMD="${INSTALL_DIR}/hook.sh"
 
 setup_hooks() {
     if ! command -v jq >/dev/null 2>&1; then
@@ -153,10 +205,5 @@ setup_hooks
 echo ""
 echo -e "${BOLD}Installation complete!${NC}"
 echo ""
-echo -e "${CYAN}To start the plugin in Zellij, run:${NC}"
-echo "  zellij plugin -- file:${INSTALL_DIR}/claude-tab-monitor.wasm"
-echo ""
-echo -e "${CYAN}Or add it to your Zellij layout:${NC}"
-echo "  pane plugin location=\"file:${INSTALL_DIR}/claude-tab-monitor.wasm\""
-echo ""
-echo -e "${CYAN}Grant the plugin permissions when prompted.${NC}"
+echo -e "${CYAN}The plugin auto-launches when Claude Code hooks fire.${NC}"
+echo -e "${CYAN}Grant Zellij plugin permissions when prompted on first use.${NC}"

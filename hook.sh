@@ -10,4 +10,9 @@
 
 state="${1:?Usage: hook.sh <working|waiting|idle|exit>}"
 
-zellij pipe --name claude-status -- "{\"pane_id\":\"$ZELLIJ_PANE_ID\",\"state\":\"$state\"}"
+PLUGIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_URL="file:${PLUGIN_DIR}/claude-tab-monitor.wasm"
+
+# Run in background: --plugin auto-launches the plugin if not running.
+# Redirect output to /dev/null to avoid blocking Claude hooks.
+zellij pipe --plugin "$PLUGIN_URL" --name claude-status -- "{\"pane_id\":\"$ZELLIJ_PANE_ID\",\"state\":\"$state\"}" >/dev/null 2>&1 &
