@@ -60,10 +60,21 @@ if [[ ! -f "$CLAUDE_SETTINGS" ]]; then
     return 0
 fi
 
-# Check if hooks are already configured
+# Remove any existing hook.sh entries first (handles upgrades cleanly)
 if grep -qF "hook.sh" "$CLAUDE_SETTINGS" 2>/dev/null; then
-    success "Claude Code hooks already configured in ${CLAUDE_SETTINGS}"
-    return 0
+    info "Removing old Claude Code hooks..."
+    jq '
+        .hooks |= (if . then
+            with_entries(
+                .value |= map(
+                    .hooks |= map(select(.command | tostring | contains("hook.sh") | not))
+                    | select(.hooks | length > 0)
+                )
+                | select(.value | length > 0)
+            )
+        else . end)
+    ' "$CLAUDE_SETTINGS" > "${CLAUDE_SETTINGS}.tmp" && mv "${CLAUDE_SETTINGS}.tmp" "$CLAUDE_SETTINGS"
+    success "Removed old hooks"
 fi
 
 if ! confirm "Add Claude Code hooks to ${CLAUDE_SETTINGS}?"; then
@@ -73,6 +84,10 @@ fi
 
 jq --arg hook_cmd "$HOOK_CMD" '
     .hooks //= {}
+    | .hooks.SessionStart = ((.hooks.SessionStart // []) + [
+        {"matcher": "startup", "hooks": [{"type": "command", "command": ($hook_cmd + " idle")}]},
+        {"matcher": "clear", "hooks": [{"type": "command", "command": ($hook_cmd + " idle")}]}
+      ])
     | .hooks.UserPromptSubmit = ((.hooks.UserPromptSubmit // []) + [
         {"matcher": "", "hooks": [{"type": "command", "command": ($hook_cmd + " working")}]}
       ])
@@ -80,11 +95,10 @@ jq --arg hook_cmd "$HOOK_CMD" '
         {"matcher": "", "hooks": [{"type": "command", "command": ($hook_cmd + " working")}]}
       ])
     | .hooks.Stop = ((.hooks.Stop // []) + [
-        {"matcher": "", "hooks": [{"type": "command", "command": ($hook_cmd + " idle")}]}
+        {"matcher": "", "hooks": [{"type": "command", "command": ($hook_cmd + " exit")}]}
       ])
     | .hooks.Notification = ((.hooks.Notification // []) + [
         {"matcher": "permission_prompt", "hooks": [{"type": "command", "command": ($hook_cmd + " waiting")}]},
-        {"matcher": "idle_prompt", "hooks": [{"type": "command", "command": ($hook_cmd + " idle")}]},
         {"matcher": "elicitation_dialog", "hooks": [{"type": "command", "command": ($hook_cmd + " waiting")}]}
       ])
     | .hooks.SessionEnd = ((.hooks.SessionEnd // []) + [

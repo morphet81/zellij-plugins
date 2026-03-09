@@ -6,7 +6,7 @@ A native Zellij WASM plugin that displays colored status indicators in tab names
 |------|-------|---------|
 | 🔵 | Working | Claude is processing or generating |
 | 🟡 | Waiting | Claude needs user input (permission prompt, elicitation dialog) |
-| 🟢 | Idle | Claude is ready for a new prompt |
+| 🟢 | Ready | New session or `/clear` — Claude is ready for first input |
 | _(none)_ | No session | No active Claude Code sessions in this tab |
 
 When multiple Claude Code sessions run in the same tab, the icon reflects the highest-priority state: **waiting > working > idle**. The original tab name is preserved and restored when all sessions exit.
@@ -53,6 +53,10 @@ The installer configures these automatically. If you installed manually, add the
 ```json
 {
   "hooks": {
+    "SessionStart": [
+      { "matcher": "startup", "hooks": [{ "type": "command", "command": "$HOME/.config/zellij/plugins/hook.sh idle" }] },
+      { "matcher": "clear", "hooks": [{ "type": "command", "command": "$HOME/.config/zellij/plugins/hook.sh idle" }] }
+    ],
     "UserPromptSubmit": [
       { "matcher": "", "hooks": [{ "type": "command", "command": "$HOME/.config/zellij/plugins/hook.sh working" }] }
     ],
@@ -60,11 +64,10 @@ The installer configures these automatically. If you installed manually, add the
       { "matcher": "", "hooks": [{ "type": "command", "command": "$HOME/.config/zellij/plugins/hook.sh working" }] }
     ],
     "Stop": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "$HOME/.config/zellij/plugins/hook.sh idle" }] }
+      { "matcher": "", "hooks": [{ "type": "command", "command": "$HOME/.config/zellij/plugins/hook.sh exit" }] }
     ],
     "Notification": [
       { "matcher": "permission_prompt", "hooks": [{ "type": "command", "command": "$HOME/.config/zellij/plugins/hook.sh waiting" }] },
-      { "matcher": "idle_prompt", "hooks": [{ "type": "command", "command": "$HOME/.config/zellij/plugins/hook.sh idle" }] },
       { "matcher": "elicitation_dialog", "hooks": [{ "type": "command", "command": "$HOME/.config/zellij/plugins/hook.sh waiting" }] }
     ],
     "SessionEnd": [
