@@ -66,16 +66,22 @@ struct State {
 }
 
 impl State {
-    /// Strip any pill prefix we may have added.
+    /// Strip all pill prefixes we may have added (handles stacked pills).
     fn strip_pill(name: &str) -> &str {
-        for pill in [PILL_WORKING, PILL_WAITING, PILL_IDLE] {
-            if let Some(rest) = name.strip_prefix(pill) {
-                if let Some(rest) = rest.strip_prefix(' ') {
-                    return rest;
+        let mut current = name;
+        loop {
+            let mut stripped = false;
+            for pill in [PILL_WORKING, PILL_WAITING, PILL_IDLE] {
+                if let Some(rest) = current.strip_prefix(pill) {
+                    current = rest.strip_prefix(' ').unwrap_or(rest);
+                    stripped = true;
+                    break;
                 }
             }
+            if !stripped {
+                return current;
+            }
         }
-        name
     }
 
     /// Get the aggregate state for a tab (by position).

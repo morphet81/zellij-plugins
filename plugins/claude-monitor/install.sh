@@ -60,21 +60,47 @@ if [[ ! -f "$CLAUDE_SETTINGS" ]]; then
     return 0
 fi
 
-# Remove any existing hook.sh entries first (handles upgrades cleanly)
-if grep -qF "hook.sh" "$CLAUDE_SETTINGS" 2>/dev/null; then
-    info "Removing old Claude Code hooks..."
-    jq '
+# Helper: remove all hook entries whose command contains the given path.
+# Preserves other hooks in the same event type and keeps empty-free structure.
+remove_plugin_hooks() {
+    local settings_file="$1"
+    local hook_path="$2"
+    jq --arg path "$hook_path" '
         .hooks |= (if . then
             with_entries(
                 .value |= map(
-                    .hooks |= map(select(.command | tostring | contains("hook.sh") | not))
+                    .hooks |= map(select(.command | tostring | contains($path) | not))
                     | select(.hooks | length > 0)
                 )
-                | select(.value | length > 0)
             )
         else . end)
-    ' "$CLAUDE_SETTINGS" > "${CLAUDE_SETTINGS}.tmp" && mv "${CLAUDE_SETTINGS}.tmp" "$CLAUDE_SETTINGS"
+    ' "$settings_file" > "${settings_file}.tmp" && mv "${settings_file}.tmp" "$settings_file"
+}
+
+# Remove any existing plugin hooks first (handles upgrades cleanly)
+if grep -qF "$HOOK_CMD" "$CLAUDE_SETTINGS" 2>/dev/null; then
+    info "Removing old Claude Monitor hooks..."
+    remove_plugin_hooks "$CLAUDE_SETTINGS" "$HOOK_CMD"
     success "Removed old hooks"
+fi
+
+# Also remove hooks referencing a legacy/different install path
+if grep -qF "hook.sh" "$CLAUDE_SETTINGS" 2>/dev/null; then
+    # Only remove entries that look like ours (path ends with /hook.sh and contains zellij)
+    if jq -e '.hooks // {} | to_entries[] | .value[]? | .hooks[]? | select(.command | tostring | (contains("hook.sh") and contains("zellij")))' "$CLAUDE_SETTINGS" >/dev/null 2>&1; then
+        info "Removing legacy Claude Monitor hooks..."
+        jq '
+            .hooks |= (if . then
+                with_entries(
+                    .value |= map(
+                        .hooks |= map(select(.command | tostring | (contains("hook.sh") and contains("zellij")) | not))
+                        | select(.hooks | length > 0)
+                    )
+                )
+            else . end)
+        ' "$CLAUDE_SETTINGS" > "${CLAUDE_SETTINGS}.tmp" && mv "${CLAUDE_SETTINGS}.tmp" "$CLAUDE_SETTINGS"
+        success "Removed legacy hooks"
+    fi
 fi
 
 if ! confirm "Add Claude Code hooks to ${CLAUDE_SETTINGS}?"; then
@@ -82,6 +108,7 @@ if ! confirm "Add Claude Code hooks to ${CLAUDE_SETTINGS}?"; then
     return 0
 fi
 
+# Add plugin hooks by appending to each event type (preserves existing hooks)
 jq --arg hook_cmd "$HOOK_CMD" '
     .hooks //= {}
     | .hooks.SessionStart = ((.hooks.SessionStart // []) + [
@@ -91,11 +118,14 @@ jq --arg hook_cmd "$HOOK_CMD" '
     | .hooks.UserPromptSubmit = ((.hooks.UserPromptSubmit // []) + [
         {"matcher": "", "hooks": [{"type": "command", "command": ($hook_cmd + " working")}]}
       ])
+    | .hooks.PreToolUse = ((.hooks.PreToolUse // []) + [
+        {"matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": ($hook_cmd + " waiting")}]}
+      ])
     | .hooks.PostToolUse = ((.hooks.PostToolUse // []) + [
         {"matcher": "", "hooks": [{"type": "command", "command": ($hook_cmd + " working")}]}
       ])
     | .hooks.Stop = ((.hooks.Stop // []) + [
-        {"matcher": "", "hooks": [{"type": "command", "command": ($hook_cmd + " idle")}]}
+        {"matcher": "", "hooks": [{"type": "command", "command": ($hook_cmd + " waiting")}]}
       ])
     | .hooks.Notification = ((.hooks.Notification // []) + [
         {"matcher": "permission_prompt", "hooks": [{"type": "command", "command": ($hook_cmd + " waiting")}]},

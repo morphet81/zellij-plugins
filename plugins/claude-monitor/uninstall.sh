@@ -5,22 +5,39 @@ set -euo pipefail
 
 # --- Remove Claude Code hooks from settings.json ---
 CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
+HOOK_CMD="${INSTALL_DIR}/hook.sh"
 
-if [[ -f "$CLAUDE_SETTINGS" ]] && grep -qF "hook.sh" "$CLAUDE_SETTINGS" 2>/dev/null; then
+# Check for plugin hooks by the specific installed path, with fallback to generic detection
+has_plugin_hooks=false
+if [[ -f "$CLAUDE_SETTINGS" ]]; then
+    if grep -qF "$HOOK_CMD" "$CLAUDE_SETTINGS" 2>/dev/null; then
+        has_plugin_hooks=true
+    elif grep -qF "hook.sh" "$CLAUDE_SETTINGS" 2>/dev/null; then
+        # Check if any hook.sh entries look like ours (contain "zellij" in path)
+        if command -v jq >/dev/null 2>&1; then
+            if jq -e '.hooks // {} | to_entries[] | .value[]? | .hooks[]? | select(.command | tostring | (contains("hook.sh") and contains("zellij")))' "$CLAUDE_SETTINGS" >/dev/null 2>&1; then
+                has_plugin_hooks=true
+            fi
+        fi
+    fi
+fi
+
+if $has_plugin_hooks; then
     if command -v jq >/dev/null 2>&1; then
-        if confirm "Remove Claude Code hooks from ${CLAUDE_SETTINGS}?"; then
-            jq '
+        if confirm "Remove Claude Monitor hooks from ${CLAUDE_SETTINGS}?"; then
+            # Remove entries whose command contains our hook path or legacy zellij hook paths.
+            # Preserves other hooks in the same event type (e.g. user's notify-send).
+            jq --arg path "$HOOK_CMD" '
                 .hooks |= (if . then
                     with_entries(
                         .value |= map(
-                            .hooks |= map(select(.command | tostring | contains("hook.sh") | not))
+                            .hooks |= map(select(.command | tostring | (contains($path) or (contains("hook.sh") and contains("zellij"))) | not))
                             | select(.hooks | length > 0)
                         )
-                        | select(.value | length > 0)
                     )
                 else . end)
             ' "$CLAUDE_SETTINGS" > "${CLAUDE_SETTINGS}.tmp" && mv "${CLAUDE_SETTINGS}.tmp" "$CLAUDE_SETTINGS"
-            success "Removed Claude Code hooks from ${CLAUDE_SETTINGS}"
+            success "Removed Claude Monitor hooks from ${CLAUDE_SETTINGS}"
         else
             warn "Skipped removing hooks."
         fi
@@ -28,7 +45,7 @@ if [[ -f "$CLAUDE_SETTINGS" ]] && grep -qF "hook.sh" "$CLAUDE_SETTINGS" 2>/dev/n
         warn "jq not found. Please manually remove hook.sh entries from ${CLAUDE_SETTINGS}"
     fi
 else
-    info "No Claude Code hooks to remove."
+    info "No Claude Monitor hooks to remove."
 fi
 
 # --- Remove legacy source lines from .zshrc ---
