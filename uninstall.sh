@@ -14,17 +14,17 @@ success() { echo -e "${GREEN}[+]${NC} $*"; }
 warn()    { echo -e "${YELLOW}[!]${NC} $*"; }
 error()   { echo -e "${RED}[-]${NC} $*"; }
 
-INSTALL_DIR="${ZELLIJ_PLUGIN_DIR:-${HOME}/.config/zellij/plugins}"
+export INSTALL_DIR="${ZELLIJ_PLUGIN_DIR:-${HOME}/.config/zellij/plugins}"
 
 usage() {
     cat <<EOF
-${BOLD}Claude Tab Monitor - Uninstaller${NC}
+${BOLD}Zellij Plugins - Uninstaller${NC}
 
 Usage: uninstall.sh [OPTIONS]
 
 Options:
   -d, --dir <path>   Install directory (default: ~/.config/zellij/plugins)
-  -y, --yes          Skip confirmation prompts
+  -y, --yes          Skip confirmation prompts, uninstall all installed plugins
   -h, --help         Show this help
 EOF
 }
@@ -58,63 +58,131 @@ confirm() {
     [[ "$answer" =~ ^[Yy] ]]
 }
 
-echo -e "${BOLD}Claude Tab Monitor - Uninstaller${NC}"
+# Export utilities so plugin scripts can use them
+export -f info success warn error confirm
+export AUTO_YES
+export RED GREEN YELLOW CYAN BOLD NC
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+echo -e "${BOLD}Zellij Plugins - Uninstaller${NC}"
 echo ""
 
-# --- Remove Claude Code hooks from settings.json ---
-CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
+# --- Discover installed plugins ---
+declare -a plugin_dirs=()
+declare -a plugin_names=()
+declare -a plugin_descs=()
+declare -a plugin_selected=()
 
-if [[ -f "$CLAUDE_SETTINGS" ]] && grep -qF "hook.sh" "$CLAUDE_SETTINGS" 2>/dev/null; then
-    if command -v jq >/dev/null 2>&1; then
-        if confirm "Remove Claude Code hooks from ${CLAUDE_SETTINGS}?"; then
-            jq '
-                .hooks |= (if . then
-                    with_entries(
-                        .value |= map(
-                            .hooks |= map(select(.command | tostring | contains("hook.sh") | not))
-                            | select(.hooks | length > 0)
-                        )
-                        | select(.value | length > 0)
-                    )
-                else . end)
-            ' "$CLAUDE_SETTINGS" > "${CLAUDE_SETTINGS}.tmp" && mv "${CLAUDE_SETTINGS}.tmp" "$CLAUDE_SETTINGS"
-            success "Removed Claude Code hooks from ${CLAUDE_SETTINGS}"
-        else
-            warn "Skipped removing hooks."
-        fi
-    else
-        warn "jq not found. Please manually remove hook.sh entries from ${CLAUDE_SETTINGS}"
-    fi
-else
-    info "No Claude Code hooks to remove."
-fi
+for conf in "${SCRIPT_DIR}"/plugins/*/plugin.conf; do
+    [[ -f "$conf" ]] || continue
+    plugin_dir="$(dirname "$conf")"
 
-# --- Remove legacy source lines from .zshrc ---
-if [[ -f "${HOME}/.zshrc" ]] && grep -qE "claude-monitor\.zsh|ai-tab-monitor\.zsh" "${HOME}/.zshrc" 2>/dev/null; then
-    if confirm "Remove legacy source line from ~/.zshrc?"; then
-        sed -i.bak '/# Claude Tab Monitor/d;/claude-monitor\.zsh/d;/ai-tab-monitor\.zsh/d' "${HOME}/.zshrc"
-        rm -f "${HOME}/.zshrc.bak"
-        success "Removed legacy source line from ~/.zshrc"
-    fi
-fi
+    PLUGIN_NAME="" PLUGIN_DESC="" WASM_NAME=""
+    source "$conf"
 
-# --- Remove plugin files ---
-echo ""
-removed=false
-for f in claude-tab-monitor.wasm hook.sh claude-monitor.zsh ai-tab-monitor.zsh ai-tab-monitor-hook.sh; do
-    if [[ -f "${INSTALL_DIR}/${f}" ]]; then
-        rm -f "${INSTALL_DIR}/${f}"
-        removed=true
-        success "Removed ${INSTALL_DIR}/${f}"
+    # Only show plugins that appear to be installed
+    if [[ -f "${INSTALL_DIR}/${WASM_NAME}" ]]; then
+        plugin_dirs+=("$plugin_dir")
+        plugin_names+=("$PLUGIN_NAME")
+        plugin_descs+=("$PLUGIN_DESC")
+        plugin_selected+=(1)  # All selected by default
     fi
 done
 
-if ! $removed; then
-    info "No plugin files found in ${INSTALL_DIR}"
+if [[ ${#plugin_dirs[@]} -eq 0 ]]; then
+    info "No installed plugins found in ${INSTALL_DIR}"
+    exit 0
 fi
 
-# --- Clean up legacy temp state files ---
-rm -rf /tmp/ai-tab-monitor-* 2>/dev/null || true
+# --- Interactive selector ---
+select_plugins() {
+    local count=${#plugin_names[@]}
+    local cursor=0
+
+    local saved_tty
+    saved_tty=$(stty -g </dev/tty 2>/dev/null)
+
+    draw() {
+        if [[ "${1:-}" == "redraw" ]]; then
+            printf '\033[%dA' "$((count + 2))" >/dev/tty
+        fi
+        echo -e "${BOLD}Select plugins to uninstall:${NC}  (↑/↓ navigate, Space toggle, Enter confirm)" >/dev/tty
+        for i in $(seq 0 $((count - 1))); do
+            local check=" "
+            [[ ${plugin_selected[$i]} -eq 1 ]] && check="x"
+            local marker="  "
+            [[ $i -eq $cursor ]] && marker="> "
+            if [[ $i -eq $cursor ]]; then
+                echo -e "${marker}${BOLD}[${check}] ${plugin_names[$i]}${NC} - ${plugin_descs[$i]}" >/dev/tty
+            else
+                echo -e "${marker}[${check}] ${plugin_names[$i]} - ${plugin_descs[$i]}" >/dev/tty
+            fi
+        done
+        echo "" >/dev/tty
+    }
+
+    draw
+
+    while true; do
+        stty raw -echo </dev/tty 2>/dev/null
+        local key
+        key=$(dd bs=1 count=1 2>/dev/null </dev/tty)
+        local key_code
+        key_code=$(printf '%d' "'$key" 2>/dev/null || echo 0)
+
+        if [[ "$key_code" -eq 27 ]]; then
+            local seq1 seq2
+            seq1=$(dd bs=1 count=1 2>/dev/null </dev/tty)
+            seq2=$(dd bs=1 count=1 2>/dev/null </dev/tty)
+            stty "$saved_tty" </dev/tty 2>/dev/null
+            if [[ "$seq1" == "[" ]]; then
+                case "$seq2" in
+                    A) [[ $cursor -gt 0 ]] && cursor=$((cursor - 1)) ;;
+                    B) [[ $cursor -lt $((count - 1)) ]] && cursor=$((cursor + 1)) ;;
+                esac
+            fi
+        elif [[ "$key" == " " ]]; then
+            stty "$saved_tty" </dev/tty 2>/dev/null
+            if [[ ${plugin_selected[$cursor]} -eq 1 ]]; then
+                plugin_selected[$cursor]=0
+            else
+                plugin_selected[$cursor]=1
+            fi
+        elif [[ "$key_code" -eq 13 ]] || [[ "$key_code" -eq 10 ]] || [[ "$key" == "" ]]; then
+            stty "$saved_tty" </dev/tty 2>/dev/null
+            break
+        else
+            stty "$saved_tty" </dev/tty 2>/dev/null
+        fi
+        draw "redraw"
+    done
+}
+
+if ! $AUTO_YES; then
+    if [[ -e /dev/tty ]]; then
+        select_plugins
+    else
+        info "Non-interactive mode: uninstalling all plugins"
+    fi
+fi
+
+# --- Uninstall selected plugins ---
+uninstalled=0
+for i in "${!plugin_dirs[@]}"; do
+    if [[ ${plugin_selected[$i]} -eq 1 ]]; then
+        echo ""
+        echo -e "${BOLD}Uninstalling ${plugin_names[$i]}...${NC}"
+        echo ""
+        source "${plugin_dirs[$i]}/uninstall.sh"
+        uninstalled=$((uninstalled + 1))
+    fi
+done
+
+if [[ $uninstalled -eq 0 ]]; then
+    warn "No plugins selected."
+    exit 0
+fi
 
 echo ""
-success "Uninstall complete!"
+success "Uninstall complete! (${uninstalled} plugin(s) removed)"
