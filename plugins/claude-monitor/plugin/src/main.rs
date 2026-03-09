@@ -59,10 +59,6 @@ struct State {
     /// Tab position -> last name we asked rename_tab() to set.
     /// This is the stable guard against event cascades — never cleared by TabUpdate.
     desired_tab_names: BTreeMap<usize, String>,
-
-    /// Set to true when TabUpdate fires (positions may have shifted).
-    /// Cleared when PaneUpdate rebuilds the pane-to-tab mapping.
-    pane_positions_stale: bool,
 }
 
 impl State {
@@ -99,13 +95,20 @@ impl State {
         best
     }
 
-    /// Recompute and apply tab names only for tabs that have active tracked panes.
+    /// Recompute and apply tab names for all tracked tabs (those with or
+    /// previously-with Claude panes). This ensures tabs that lost their last
+    /// pane get their original name restored.
     fn update_all_tab_names(&mut self) {
         let mut affected_tabs: BTreeSet<usize> = BTreeSet::new();
+        // Tabs with active Claude panes.
         for (&pane_id, _) in &self.pane_states {
             if let Some(&tab_pos) = self.pane_to_tab_position.get(&pane_id) {
                 affected_tabs.insert(tab_pos);
             }
+        }
+        // Tabs we previously tracked (may need pill removed).
+        for &tab_pos in self.original_tab_names.keys() {
+            affected_tabs.insert(tab_pos);
         }
         for &tab_pos in &affected_tabs {
             self.update_tab_name(tab_pos);
@@ -181,8 +184,9 @@ impl ZellijPlugin for State {
                 self.desired_tab_names
                     .retain(|pos, _| valid_positions.contains(pos));
 
-                // Mark pane positions as stale — they may reference old tab positions.
-                self.pane_positions_stale = true;
+                // Note: pane_to_tab_position may now reference old tab positions.
+                // Pipe messages arriving before PaneUpdate will harmlessly skip
+                // any pane whose position lookup fails.
             }
             Event::PaneUpdate(manifest) => {
                 self.pane_to_tab_position.clear();
@@ -194,11 +198,6 @@ impl ZellijPlugin for State {
                         self.pane_to_tab_position.insert(pane.id, tab_position);
                     }
                 }
-
-                // Re-apply pill names when tab positions shifted OR when we have
-                // tracked pane states that haven't been applied yet (e.g. pipe
-                // message arrived before the first PaneUpdate mapped the pane).
-                self.pane_positions_stale = false;
 
                 if !self.pane_states.is_empty() {
                     // Capture original tab names for any newly-mapped panes.
