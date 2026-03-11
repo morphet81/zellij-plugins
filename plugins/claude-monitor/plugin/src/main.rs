@@ -47,8 +47,8 @@ struct State {
     /// Per-pane AI session state.
     pane_states: BTreeMap<u32, PaneState>,
 
-    /// Original (clean) tab name, keyed by tab position.
-    original_tab_names: BTreeMap<usize, String>,
+    /// Original (clean) tab name, keyed by pane ID (stable across tab reorder/delete).
+    pane_original_tab_names: BTreeMap<u32, String>,
 
     /// Pane ID -> tab position (0-based).
     pane_to_tab_position: BTreeMap<u32, usize>,
@@ -80,6 +80,16 @@ impl State {
         }
     }
 
+    /// Look up the original tab name for a position via pane-keyed storage.
+    fn original_tab_name_for(&self, tab_position: usize) -> Option<String> {
+        for (&pane_id, name) in &self.pane_original_tab_names {
+            if self.pane_to_tab_position.get(&pane_id) == Some(&tab_position) {
+                return Some(name.clone());
+            }
+        }
+        None
+    }
+
     /// Get the aggregate state for a tab (by position).
     fn aggregate_tab_state(&self, tab_position: usize) -> Option<PaneState> {
         let mut best: Option<PaneState> = None;
@@ -98,7 +108,12 @@ impl State {
     /// Recompute and apply tab names for all tracked tabs (those with or
     /// previously-with Claude panes). This ensures tabs that lost their last
     /// pane get their original name restored.
-    fn update_all_tab_names(&mut self) {
+    ///
+    /// When `positions_shifted` is true (tab move/reorder detected), the
+    /// orphaned-pill cleanup is skipped because `tab_names` may still reflect
+    /// pre-move positions and renaming at those positions would hit the wrong
+    /// tabs.
+    fn update_all_tab_names(&mut self, positions_shifted: bool) {
         let mut affected_tabs: BTreeSet<usize> = BTreeSet::new();
         // Tabs with active Claude panes.
         for (&pane_id, _) in &self.pane_states {
@@ -106,25 +121,47 @@ impl State {
                 affected_tabs.insert(tab_pos);
             }
         }
-        // Tabs we previously tracked (may need pill removed).
-        for &tab_pos in self.original_tab_names.keys() {
-            affected_tabs.insert(tab_pos);
+        // Tabs with stored original names (may need pill removed).
+        for (&pane_id, _) in &self.pane_original_tab_names {
+            if let Some(&tab_pos) = self.pane_to_tab_position.get(&pane_id) {
+                affected_tabs.insert(tab_pos);
+            }
         }
         for &tab_pos in &affected_tabs {
             self.update_tab_name(tab_pos);
+        }
+
+        // Clean up orphaned pills: tabs that have a pill prefix but no tracked panes.
+        // Skip when positions shifted — tab_names may be stale and renaming at
+        // old positions would hit the wrong tabs.
+        if positions_shifted {
+            return;
+        }
+        for (&tab_pos, name) in &self.tab_names.clone() {
+            if affected_tabs.contains(&tab_pos) {
+                continue;
+            }
+            let stripped = Self::strip_pill(name);
+            if stripped.len() != name.len() {
+                // Tab has a pill but no tracked panes — strip it.
+                let clean = stripped.to_string();
+                self.desired_tab_names.insert(tab_pos, clean.clone());
+                self.tab_names.insert(tab_pos, clean.clone());
+                rename_tab(tab_pos as u32 + 1, &clean);
+            }
         }
     }
 
     /// Update a single tab's name based on its aggregate pane state.
     fn update_tab_name(&mut self, tab_position: usize) {
-        let original = match self.original_tab_names.get(&tab_position) {
+        let original = match self.original_tab_name_for(tab_position) {
             Some(name) => name,
             None => return,
         };
 
         let desired = match self.aggregate_tab_state(tab_position) {
-            Some(state) => format!("{} {}", state.pill(), original),
-            None => original.clone(),
+            Some(state) => format!("{} {}", state.pill(), &original),
+            None => original,
         };
 
         // Guard: skip if the tab already shows the desired name.
@@ -169,27 +206,14 @@ impl ZellijPlugin for State {
                 for tab in &tabs {
                     self.tab_names.insert(tab.position, tab.name.clone());
                     valid_positions.insert(tab.position);
-
-                    // Only update original name for tabs we're already tracking
-                    // (i.e., tabs that have or had Claude sessions).
-                    if self.original_tab_names.contains_key(&tab.position) {
-                        let clean = Self::strip_pill(&tab.name).to_string();
-                        self.original_tab_names.insert(tab.position, clean);
-                    }
                 }
 
-                // Clean up entries for tabs that no longer exist.
-                self.original_tab_names
-                    .retain(|pos, _| valid_positions.contains(pos));
+                // Clean up desired_tab_names for tabs that no longer exist.
                 self.desired_tab_names
                     .retain(|pos, _| valid_positions.contains(pos));
-
-                // Note: pane_to_tab_position may now reference old tab positions.
-                // Pipe messages arriving before PaneUpdate will harmlessly skip
-                // any pane whose position lookup fails.
             }
             Event::PaneUpdate(manifest) => {
-                self.pane_to_tab_position.clear();
+                let old_pane_to_tab = std::mem::take(&mut self.pane_to_tab_position);
                 for (&tab_position, panes) in &manifest.panes {
                     for pane in panes {
                         if pane.is_plugin || pane.is_suppressed {
@@ -200,19 +224,48 @@ impl ZellijPlugin for State {
                 }
 
                 if !self.pane_states.is_empty() {
-                    // Capture original tab names for any newly-mapped panes.
+                    // Remove disappeared panes (in pane_states but no longer in manifest).
+                    let disappeared: Vec<u32> = self
+                        .pane_states
+                        .keys()
+                        .filter(|pid| !self.pane_to_tab_position.contains_key(pid))
+                        .copied()
+                        .collect();
+                    for pane_id in disappeared {
+                        self.pane_states.remove(&pane_id);
+                        self.pane_original_tab_names.remove(&pane_id);
+                    }
+
+                    // Update pane_original_tab_names only when the pane stayed
+                    // at the same position (to pick up user renames).  If the
+                    // pane moved to a different position its original name must
+                    // be preserved — the name at the new position belongs to
+                    // the tab that was previously there.
                     for (&pane_id, _) in &self.pane_states {
                         if let Some(&tab_pos) = self.pane_to_tab_position.get(&pane_id) {
-                            if !self.original_tab_names.contains_key(&tab_pos) {
+                            let same_position =
+                                old_pane_to_tab.get(&pane_id) == Some(&tab_pos);
+                            if same_position {
                                 if let Some(current_name) = self.tab_names.get(&tab_pos) {
                                     let clean = Self::strip_pill(current_name).to_string();
-                                    self.original_tab_names.insert(tab_pos, clean);
+                                    self.pane_original_tab_names.insert(pane_id, clean);
                                 }
                             }
                         }
                     }
-                    self.update_all_tab_names();
+
+                    // Detect whether any tracked pane moved to a different tab
+                    // position (tab move/reorder).
+                    let positions_shifted = self.pane_states.keys().any(|&pid| {
+                        old_pane_to_tab.get(&pid) != self.pane_to_tab_position.get(&pid)
+                    });
+
+                    // Positions may have shifted; clear desired_tab_names to allow
+                    // update_tab_name guards to re-evaluate.
+                    self.desired_tab_names.clear();
+                    self.update_all_tab_names(positions_shifted);
                 }
+
             }
             Event::PermissionRequestResult(_) => {}
             _ => {}
@@ -251,16 +304,19 @@ impl ZellijPlugin for State {
                         self.pane_to_tab_position.get(&pid) == Some(&tab_pos)
                     });
                     if has_remaining {
+                        self.pane_original_tab_names.remove(&pane_id);
                         self.update_tab_name(tab_pos);
                     } else {
                         // Restore original name and stop tracking.
-                        if let Some(original) = self.original_tab_names.get(&tab_pos) {
-                            let original = original.clone();
+                        if let Some(original) = self.pane_original_tab_names.remove(&pane_id) {
                             self.desired_tab_names.insert(tab_pos, original.clone());
                             self.tab_names.insert(tab_pos, original.clone());
                             rename_tab(tab_pos as u32 + 1, &original);
                         }
                     }
+                } else {
+                    // Pane not in manifest — clean up.
+                    self.pane_original_tab_names.remove(&pane_id);
                 }
             }
             state_str => {
@@ -275,10 +331,10 @@ impl ZellijPlugin for State {
 
                 if let Some(&tab_pos) = self.pane_to_tab_position.get(&pane_id) {
                     // Capture the original tab name on first track.
-                    if !self.original_tab_names.contains_key(&tab_pos) {
+                    if !self.pane_original_tab_names.contains_key(&pane_id) {
                         if let Some(current_name) = self.tab_names.get(&tab_pos) {
                             let clean = Self::strip_pill(current_name).to_string();
-                            self.original_tab_names.insert(tab_pos, clean);
+                            self.pane_original_tab_names.insert(pane_id, clean);
                         }
                     }
                     self.update_tab_name(tab_pos);
